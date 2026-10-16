@@ -10,7 +10,15 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any, Optional
+
+try:
+    import jieba as _jieba_mod
+
+    _jieba_mod.setLogLevel(60)  # 关闭初始化日志
+    _JIEBA: Any = _jieba_mod
+except Exception:  # pragma: no cover - 环境缺少 jieba 时降级
+    _JIEBA = None
 
 from .model import (
     CLAIM_LABEL,
@@ -39,14 +47,20 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", "", (text or "")).lower()
 
 
-def _kw_set(rec: dict) -> set[str]:
-    """从标题+正文+显式关键词中抽取用于归并的关键词。"""
-    kws: set[str] = set(rec.get("keywords") or [])
-    text = _norm(rec.get("title", "")) + _norm(rec.get("content", ""))
-    # 抽取 2-6 字的中文片段作为粗特征，配合显式关键词使用
-    for m in re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,6}", text):
-        kws.add(m.lower())
-    return kws
+def _explicit_kw(atom: EvidenceAtom) -> set[str]:
+    """上游/人工标注的显式主题词（如 key_word_list、mock 的 keywords）。
+
+    这类标注可信度高于正文抽取，因此单独作为归并的强证据。
+    """
+    s: set[str] = set()
+    for k in atom.keywords or []:
+        s |= _tokens(str(k))
+    return s
+
+
+def _kw_set(atom: EvidenceAtom) -> set[str]:
+    """原子用于归并的有效实体集合（已过滤停用词）。"""
+    return _explicit_kw(atom) | _tokens(atom.title + " " + atom.content)
 
 
 def classify_claim(rec: dict) -> ClaimType:
@@ -161,84 +175,187 @@ def _anchors(atom: EvidenceAtom) -> set[str]:
 def _share_anchor(a: EvidenceAtom, b: EvidenceAtom) -> bool:
     """主题锚点是否相容。
 
-    规则：共享任一锚点即相容；一方为 __generic__（无明确主题）时视为相容
-    （便于"传闻->澄清"这类锚点不同的链条仍能归并）。
-    但两个都命中明确锚点且完全不重叠时，判定为不同事件。
+    规则（按可信度从高到低）：
+    1. 显式主题词（上游 key_word_list / 标注 keywords）有重合 -> 相容；
+    2. 共享任一主题锚点 -> 相容；
+    3. 一方无明确主题（__generic__）-> 相容（便于"传闻->澄清"链条归并）；
+    4. 两个都命中明确锚点且完全不重叠 -> 不同事件。
     """
+    if _explicit_kw(a) & _explicit_kw(b):
+        return True
     aa, ab = _anchors(a), _anchors(b)
     if "__generic__" in aa or "__generic__" in ab:
         return True
     return bool(aa & ab)
 
 
+# 归并门槛：两条记录至少共享这么多个"有效实体"才考虑合并。
+# 真实财经新闻里，同标的下常有大量互不相关的事件，仅凭同标的+通用词
+# （如"茅台""白酒"）会把不同事件错误合并，因此必须要求足够的实体重合。
+MIN_SHARED_ENTITIES = 2
+
+
+def _title_kw(atom: EvidenceAtom) -> set[str]:
+    """标题实体。标题信息密度最高、噪声最小，是归并的主要依据。
+
+    为何不只用全文：正文里公司的拆分词（"贵州"/"茅台"）会同时出现在
+    大量互不相关的新闻中，仅凭这些共同词会把不同事件错误合并。
+    """
+    return _tokens(atom.title)
+
+
 def _similarity(a: EvidenceAtom, b: EvidenceAtom) -> float:
     """归并相似度——显式可解释，返回 0~1。"""
-    score = 0.0
-    # 1) 标的重合：同一标的是归并的强前提
-    if a.instruments and b.instruments:
-        inter = set(a.instruments) & set(b.instruments)
-        if inter:
-            score += 0.45
-        else:
-            score -= 0.25  # 标的完全不重叠，倾向不合并
-
-    # 2) 主题锚点：不同事项必须切开
     if not _share_anchor(a, b):
         return 0.0
 
-    # 3) 关键词重合（Jaccard on 关键词）
-    ka, kb = _kw_set({"keywords": a.keywords}).union(_tokens(a.title + a.content)), \
-             _kw_set({"keywords": b.keywords}).union(_tokens(b.title + b.content))
-    if ka and kb:
-        jac = len(ka & kb) / len(ka | kb)
-        score += min(jac * 2.0, 0.55)
+    ta, tb = _title_kw(a), _title_kw(b)
+    ka, kb = _kw_set(a), _kw_set(b)
+    if not ka or not kb:
+        return 0.0
+
+    inter_t = ta & tb          # 共享标题实体
+    inter = ka & kb            # 共享全文实体
+    explicit = _explicit_kw(a) & _explicit_kw(b)   # 共享显式主题词
+
+    # 官方/公司口径是事件的"权威锚"，但其措辞常与媒体报道差异极大
+    # （如媒体说"海外订单"、公告写"重大合同"），标题层面几乎无共同词。
+    # 因此对这类记录放宽门槛：只要同标的 + 共享主题锚点即可归并。
+    authoritative = (
+        a.source_tier in (SourceTier.OFFICIAL, SourceTier.COMPANY)
+        or b.source_tier in (SourceTier.OFFICIAL, SourceTier.COMPANY)
+    )
+    same_inst = bool(set(a.instruments) & set(b.instruments))
+    anchor_overlap = _anchors(a) & _anchors(b)
+    authoritative_link = authoritative and same_inst and bool(anchor_overlap)
+
+    # 门槛：这是一条"防过合并"的关键闸门。
+    # - 常规：标题实体与全文实体都要共享至少 MIN_SHARED_ENTITIES 个；
+    # - 上游显式主题词重合（可信标注）或权威口径关联时可放宽。
+    if not explicit and not authoritative_link:
+        if len(inter_t) < MIN_SHARED_ENTITIES or len(inter) < MIN_SHARED_ENTITIES:
+            return 0.0
+
+    score = 0.0
+    # 1) 标的重合：有利证据，但单独不足以归并
+    if a.instruments and b.instruments:
+        if same_inst:
+            score += 0.25
+        else:
+            return 0.0  # 都有标的且不重叠 -> 不同事件
+
+    # 2) 显式主题词重合（强证据）
+    if explicit:
+        score += 0.25
+
+    # 3) 权威口径关联（官方公告 + 同标的 + 同主题）
+    if authoritative_link:
+        score += 0.22
+
+    # 4) 标题实体重合度（主要依据）
+    jt = len(inter_t) / len(ta | tb) if (ta | tb) else 0.0
+    score += min(jt * 2.0, 0.45)
+
+    # 5) 全文实体重合度（辅助）
+    jb = len(inter) / len(ka | kb) if (ka | kb) else 0.0
+    score += min(jb * 1.2, 0.25)
+
+    # 6) 共享标题实体数量的加成
+    score += min(len(inter_t) * 0.06, 0.20)
 
     return max(0.0, min(score, 1.0))
 
 
+# 停用词：金融新闻中的高频通用词。不过滤会导致"下跌/板块/公司"这类词
+# 把毫无关系的内容误归并为同一事件（过合并）。
+STOPWORDS = {
+    # 涨跌与盘面
+    "下跌", "上涨", "大涨", "大跌", "涨停", "跌停", "炸板", "走强", "走弱", "回落", "反弹",
+    "异动", "解读", "板块", "概念", "行业", "题材", "个股", "股票", "股价", "成交", "换手",
+    "指数", "市场", "大盘", "沪深", "两市", "A股", "港股", "美股", "a股",
+    # 主体与通用名
+    "公司", "股份", "集团", "有限", "上市公司", "企业", "机构", "券商", "分析师", "投资者",
+    "资金", "主力", "融资", "北向", "南向", "净买入", "净卖出", "评级", "研报", "观点",
+    # 叙事功能词
+    "消息", "新闻", "快讯", "报道", "表示", "认为", "预计", "有望", "可能", "将", "拟",
+    "宣布", "发布", "披露", "获悉", "今日", "昨日", "月内", "年内", "近期", "目前",
+    "以来", "同比", "环比", "持续", "进一", "以及", "此外", "同时", "值得", "关注",
+    # 单位与量词
+    "亿元", "万元", "万股", "亿", "万", "元", "股", "同比增", "增长", "下降", "提升",
+    # 异动解读的通用措辞（否则不同行业的解读会因这些套话互相误归并）
+    "涨幅", "较大", "此前", "局部", "承压", "走弱", "影响", "业务", "板块下跌",
+}
+
+
+def _is_meaningful(tok: str) -> bool:
+    """判断一个片段是否具备区分度。"""
+    if len(tok) < 2:
+        return False
+    if tok in STOPWORDS:
+        return False
+    if tok.isdigit():
+        return False
+    # 纯数字+单位的组合无区分度
+    if re.fullmatch(r"[\d\.]+[%亿万]", tok):
+        return False
+    return True
+
+
 def _tokens(text: str) -> set[str]:
-    return set(re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,6}", _norm(text)))
+    """抽取有区分度的实体词。
+
+    用 jieba 分词（而非滑动 n-gram）：
+    - n-gram 会切出大量重叠片段（"异动解读（大跌）" → "异动解读""动解读（"…），
+      既无法被停用词精确命中，又会让无关内容因噪声片段而误归并。
+    - 分词后"异动/解读/大跌"都会成为独立词并被停用词过滤，实体匹配显著更准。
+    """
+    t = _norm(text)
+    if _JIEBA is not None:
+        words = _JIEBA.lcut(t)
+    else:  # 兜底：无 jieba 时退回 n-gram
+        for sw in STOPWORDS:
+            t = t.replace(sw, " ")
+        words = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,6}", t)
+    return {w for w in words if _is_meaningful(w)}
+
+
+# 归并时间窗：与簇代表点相隔超过此值就不再比较
+WINDOW_MS = 7 * 86400 * 1000
 
 
 def resolve_events(atoms: list[EvidenceAtom], threshold: float = 0.42) -> list[Event]:
     """事件归并：把描述同一事件的多条证据聚成一簇。
 
-    使用并查集式的贪心聚类。低于阈值的不强合并，标为独立事件。
+    采用**代表点聚类**而非并查集连通：
+    并查集存在"链式传递"缺陷——A~B 相似、B~C 相似，即使 A 与 C 毫不相关
+    也会被连成一簇，导致事件无限膨胀（实测会把数十条无关新闻并成一条）。
+    代表点聚类要求新记录与簇的**代表记录**（最早的那条，通常即"最初来源"）
+    达到阈值才归入，从机制上杜绝链式膨胀。
     """
-    n = len(atoms)
-    parent = list(range(n))
+    order = sorted(range(len(atoms)), key=lambda i: atoms[i].disclose_time or 0)
+    clusters: list[dict[str, Any]] = []
 
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x: int, y: int) -> None:
-        rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[ry] = rx
-
-    # 时间邻近前置：只在时间窗内做比较，避免无序比较造成误合并
-    order = sorted(range(n), key=lambda i: atoms[i].disclose_time or 0)
-    for idx_a in range(n):
-        i = order[idx_a]
-        for idx_b in range(idx_a + 1, n):
-            j = order[idx_b]
-            ti = atoms[i].disclose_time or 0
-            tj = atoms[j].disclose_time or 0
-            if tj - ti > 12 * 86400 * 1000:  # 超过 12 天不再比较
-                break
-            if _similarity(atoms[i], atoms[j]) >= threshold:
-                union(i, j)
-
-    clusters: dict[int, list[EvidenceAtom]] = defaultdict(list)
-    for i in range(n):
-        clusters[find(i)].append(atoms[i])
+    for idx in order:
+        atom = atoms[idx]
+        best_c: Optional[dict[str, Any]] = None
+        best_s = 0.0
+        for c in clusters:
+            rep = c["rep"]
+            t_rep = rep.disclose_time or 0
+            t_atom = atom.disclose_time or 0
+            if abs(t_atom - t_rep) > WINDOW_MS:
+                continue
+            s = _similarity(rep, atom)
+            if s > best_s:
+                best_s, best_c = s, c
+        if best_c is not None and best_s >= threshold:
+            best_c["members"].append(atom)
+        else:
+            clusters.append({"rep": atom, "members": [atom]})
 
     events: list[Event] = []
-    for members in clusters.values():
-        members = sorted(members, key=lambda a: a.disclose_time or 0)
+    for c in clusters:
+        members = sorted(c["members"], key=lambda a: a.disclose_time or 0)
         origin = members[0]
         instruments = sorted({ins for m in members for ins in m.instruments})
         event = Event(
@@ -256,7 +373,8 @@ def resolve_events(atoms: list[EvidenceAtom], threshold: float = 0.42) -> list[E
                 f"归并依据：标的={','.join(instruments) or '未标注'}；"
                 f"时间跨度={_fmt_span(members)}；"
                 f"共{len(members)}条原始记录、{len({m.disclose_time for m in members})}个版本；"
-                f"初始来源={origin.source_name}({TIER_LABEL[origin.source_tier]})"
+                f"初始来源={origin.source_name}({TIER_LABEL[origin.source_tier]})；"
+                f"聚类方式=代表点（阈值{threshold}）"
             ),
         )
         events.append(event)
@@ -371,12 +489,44 @@ def adjudicate(event: Event) -> None:
 
 
 def _group_threads(atoms: list[EvidenceAtom]) -> dict[str, list[EvidenceAtom]]:
-    """把事件内的证据按主题锚点拆成子线索。"""
+    """把事件内的证据按主题锚点拆成子线索。
+
+    用**共享锚点连通**（并查集）分组，而不是取单个锚点做 key。
+    原因：一条记录常同时命中多个锚点（如"控股股东增持…不涉及控制权变更"
+    同时命中 {股东增减持, 收购要约}）。若只取其中一个作 key，会把本属同一
+    线索的记录拆散，导致更正/否认无法在同一线索内生效。
+    """
+    n = len(atoms)
+    if n == 0:
+        return {}
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+
+    anchor_sets = [_anchors(a) for a in atoms]
+    for i in range(n):
+        for j in range(i + 1, n):
+            ai, aj = anchor_sets[i], anchor_sets[j]
+            if "__generic__" in ai or "__generic__" in aj:
+                continue  # 无明确主题的记录不参与跨线索合并
+            if ai & aj:
+                union(i, j)
+
     threads: dict[str, list[EvidenceAtom]] = defaultdict(list)
-    for a in atoms:
-        hits = _anchors(a)
-        key = sorted(hits)[0] if "__generic__" not in hits else "__generic__"
-        threads[key].append(a)
+    for i in range(n):
+        root = find(i)
+        if not threads:
+            threads[str(root)] = []
+        threads[str(root)].append(atoms[i])
     return threads
 
 

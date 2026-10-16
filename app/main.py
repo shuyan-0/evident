@@ -8,12 +8,12 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .adapters import DATA_MODE, fetch_records
+from .adapters import DATA_MODE, fetch_market_context, fetch_records
 from .pipeline import build_dashboard
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="Evident", version="1.0.0", description="投资事件情报与证据时间线")
+app = FastAPI(title="Evident", version="1.1.0", description="投资事件情报与证据时间线")
 
 
 @app.get("/api/health")
@@ -31,14 +31,24 @@ def dashboard(watch: str = Query("", description="逗号分隔的关注标的，
 
     数据缺失/失败/降级时，health 中会显式标注，绝不静默生成"正常"结论。
     """
-    records, health_obj = fetch_records()
+    watch_list = [w.strip() for w in watch.split(",") if w.strip()]
+
+    records, health_obj = fetch_records(watch_list)
     payload = build_dashboard(records, health_obj)
 
-    watch_list = [w.strip() for w in watch.split(",") if w.strip()]
-    if watch_list:
+    effective_watch = health_obj.watchlist or watch_list
+    if effective_watch:
         for ev in payload["events"]:
-            ev["watched"] = bool(set(ev["instruments"]) & set(watch_list))
+            ev["watched"] = bool(set(ev["instruments"]) & set(effective_watch))
         payload["events"].sort(key=lambda e: (not e.get("watched"),))
+
+    # 行情/估值上下文（仅作标的关联展示，不构成涨跌预测或建议）
+    ctx = fetch_market_context(health_obj.watchlist) if health_obj.mode == "real" else {"quotes": {}, "valuations": {}, "errors": []}
+    payload["market"] = ctx
+    if ctx.get("errors"):
+        for e in ctx["errors"]:
+            payload["health"]["warnings"].append(e)
+        payload["health"]["degraded"] = True
 
     return JSONResponse(payload)
 

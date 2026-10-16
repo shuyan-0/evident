@@ -31,26 +31,36 @@ def t1_main_link():
     recs, h = fetch_records()
     d = build_dashboard(recs, h)
     check("10条原始记录全部原子化", d["stats"]["atom_count"] == 10)
-    check("归并为3个事件（无过合并/漏合并）", d["stats"]["event_count"] == 3,
+    # 10 条记录 = 4 个事件：
+    #   ①收购传闻(含否认) ②算力订单 ③固态电池传闻 ④增持公告(含更正)
+    # 增持与收购同标的但属不同事项，被主题锚点正确切开（防止过合并）。
+    check("归并为4个事件（增持/收购已正确切开）", d["stats"]["event_count"] == 4,
           f"got {d['stats']['event_count']}")
-    check("检测到传闻vs官方否认冲突", d["stats"]["conflict_count"] >= 2)
+    check("检测到传闻vs官方否认冲突", d["stats"]["conflict_count"] >= 1)
+
     statuses = {e["status"] for e in d["events"]}
-    check("覆盖 DENIED/CONFIRMED/RUMORED 状态", {"DENIED", "CONFIRMED", "RUMORED"} <= statuses)
+    check("覆盖 DENIED/CONFIRMED/RUMORED/CORRECTED 状态",
+          {"DENIED", "CONFIRMED", "RUMORED", "CORRECTED"} <= statuses, str(statuses))
 
     ev = next(e for e in d["events"] if e["status"] == "DENIED")
     check("事件标题取最初来源叙事（传闻）", "收购" in ev["title"] or "白酒" in ev["title"], ev["title"])
     check("归并依据可解释", "归并依据" in ev["resolve_basis"])
     check("每条证据保留原始记录ID", all(a["raw_id"].startswith("mock:") for a in ev["atoms"]))
+    check("否认事件归并了传闻+回应+转载", ev["atom_count"] >= 3, str(ev["atom_count"]))
 
-    # 版本演化：更正记录 update != disclose
-    corrected = [a for a in ev["atoms"] if a["polarity"] == "correct"]
-    check("更正记录标记[发布后被修改]", corrected and corrected[0]["was_edited"])
+    # 子线索仲裁：增持事件含更正记录，应判定为 CORRECTED 而非被其他线索污染
+    inc = next((e for e in d["events"] if "增持" in e["title"]), None)
+    check("增持事件状态为已更正（子线索仲裁生效）",
+          inc is not None and inc["status"] == "CORRECTED",
+          inc["status"] if inc else "未找到")
 
-    # 权重排序
-    w = [a["weight"] for a in ev["atoms"]]
+    all_atoms = [a for e in d["events"] for a in e["atoms"]]
+    corrected = [a for a in all_atoms if a["polarity"] == "correct"]
+    check("更正记录标记[发布后被修改]", bool(corrected) and corrected[0]["was_edited"])
+
+    w = [a["weight"] for a in all_atoms]
     check("来源权重正确（官方1.0 > 传闻0.06）", max(w) == 1.0 and min(w) < 0.1)
 
-    # 标的关联
     inst = {i["code"] for i in d["instruments"]}
     check("标的索引包含三个关注标的", {"600519.SH", "300033.SZ", "002594.SZ"} <= inst)
 
