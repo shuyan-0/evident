@@ -3,6 +3,23 @@
 > 题目 08：同一投资事件可能以公告、新闻、研报观点和市场传闻等形式持续演化。
 > 本产品帮助用户看清**事件最初来源、事实变化、证据冲突、当前状态以及与关注标的的关系**。
 
+## 🌐 在线体验（公开链接）
+
+**https://a1e235b65284ebef9.app.workbuddy.host**
+
+打开即用，无需安装。页面顶部会如实标注当前数据模式。
+
+## 📦 交付物索引
+
+| 交付物 | 位置 |
+|---|---|
+| 可操作 Web 产品 URL | https://a1e235b65284ebef9.app.workbuddy.host |
+| 源代码 | 本仓库（`app/`、`static/`、`run.py`） |
+| README | `README.md`（本文件） |
+| AI 使用与验证记录 | `docs/AI_USAGE.md` |
+| 测试说明 | `docs/TESTING.md` |
+| 测试代码 | `tests.py`（24 项断言） |
+
 ## 一、启动方式
 
 ```bash
@@ -81,3 +98,20 @@ iFinD MCP：沙箱内无凭据可调用，做适配器预留位，如实列为�
 ## 六、合规声明
 
 不输出涨跌预测、收益承诺或买卖建议；事实/推断/不确定在 UI 上视觉区分；所有结论可回溯至原始记录 ID 与原文链接。
+
+## 七、部署与仓库推送
+
+### 已完成的部署
+本项目已发布为在线应用：**https://a1e235b65284ebef9.app.workbuddy.host**
+启动命令：`EVIDENT_DATA_MODE=auto python3 run.py`（服务读取 `PORT` 环境变量并绑定 `0.0.0.0`）。
+
+### 推送到远程仓库
+本地 git 仓库已初始化并完成首次提交。推送到 GitHub：
+
+```bash
+git remote add origin https://github.com/<你的用户名>/evident.git
+git branch -M main
+git push -u origin main
+```
+
+> 注：沙箱内 `gh` 未登录，故未自动创建远程仓库。代码已通过密钥扫描（无硬编码凭据）。
