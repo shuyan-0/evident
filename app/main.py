@@ -64,4 +64,10 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/downloads")
+def downloads_page() -> FileResponse:
+    """交付材料下载页：便于评审直接下载源码包与全部文档。"""
+    return FileResponse(STATIC_DIR / "downloads" / "index.html")
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
