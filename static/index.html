@@ -132,7 +132,7 @@ main{flex:1;display:grid;grid-template-columns:320px 1fr 360px;overflow:hidden}
   </div>
   <div class="controls">
     <input id="watch" placeholder="关注标的，如 600519.SH,300033.SZ">
-    <button onclick="load()">刷新</button>
+    <button onclick="load(true)">刷新</button>
   </div>
 </header>
 <div id="health"></div>
@@ -172,7 +172,8 @@ function renderHealth(h){
   } else if(h.degraded){
     txt = `数据完整性受限：当前为 <b>${h.mode}</b> 模式，结论不可视为完全可靠。`;
   } else {
-    txt = `数据源正常（${h.mode} 模式），共 ${h.sources ? Object.keys(h.sources).length : 0} 个接口返回。`;
+    txt = `数据源正常（${h.mode} 模式），共 ${h.sources ? Object.keys(h.sources).length : 0} 个接口返回。`
+        + (h.cache_hit ? ` <span style="opacity:.75">［结果来自缓存，${h.cache_age_s}s 前抓取；点刷新可回源］</span>` : '');
   }
   if(h.warnings && h.warnings.length){
     extra = '<ul>' + h.warnings.map(w=>`<li>${w}</li>`).join('') + '</ul>';
@@ -319,12 +320,20 @@ function fatal(msg, hint){
   document.getElementById('market').innerHTML = '<div class="empty">—</div>';
 }
 
-async function load(){
+async function load(force){
   const w = document.getElementById('watch').value.trim();
+  // 加载态：避免用户面对空白界面等待
+  const evBox = document.getElementById('events');
+  if(!DATA){
+    evBox.innerHTML = '<div class="empty">正在拉取扶摇数据并归并事件…<br><span style="font-size:11px">首次约需数秒</span></div>';
+    document.getElementById('timeline').innerHTML = '<div class="empty">加载中…</div>';
+  }
+  document.getElementById('watch').setAttribute('disabled','');
   let r;
   try{
-    r = await fetch(API_BASE + '/api/dashboard?watch=' + encodeURIComponent(w));
+    r = await fetch(API_BASE + '/api/dashboard?watch=' + encodeURIComponent(w) + (force?'&refresh=1':''));
   }catch(e){
+    document.getElementById('watch').removeAttribute('disabled');
     fatal(
       location.protocol === 'file:' ? '当前是以本地文件方式打开页面，未连接到后端服务。'
                                      : '后端服务不可达。',
@@ -333,8 +342,9 @@ async function load(){
     );
     return;
   }
-  if(!r.ok){ fatal('后端返回异常状态 ' + r.status, '请查看服务日志确认后端是否正常运行。'); return; }
+  if(!r.ok){ document.getElementById('watch').removeAttribute('disabled'); fatal('后端返回异常状态 ' + r.status, '请查看服务日志确认后端是否正常运行。'); return; }
   DATA = await r.json();
+  document.getElementById('watch').removeAttribute('disabled');
   renderHealth(DATA.health);
   renderStats(DATA.stats);
   renderMarket(DATA.market);

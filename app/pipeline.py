@@ -16,6 +16,7 @@ try:
     import jieba as _jieba_mod
 
     _jieba_mod.setLogLevel(60)  # 关闭初始化日志
+    _jieba_mod.lcut("预热")      # 提前加载词典，避免首个请求承担初始化开销
     _JIEBA: Any = _jieba_mod
 except Exception:  # pragma: no cover - 环境缺少 jieba 时降级
     _JIEBA = None
@@ -52,15 +53,12 @@ def _explicit_kw(atom: EvidenceAtom) -> set[str]:
 
     这类标注可信度高于正文抽取，因此单独作为归并的强证据。
     """
-    s: set[str] = set()
-    for k in atom.keywords or []:
-        s |= _tokens(str(k))
-    return s
+    return _features(atom)["explicit"]
 
 
 def _kw_set(atom: EvidenceAtom) -> set[str]:
     """原子用于归并的有效实体集合（已过滤停用词）。"""
-    return _explicit_kw(atom) | _tokens(atom.title + " " + atom.content)
+    return _features(atom)["full"]
 
 
 def classify_claim(rec: dict) -> ClaimType:
@@ -163,13 +161,18 @@ TOPIC_ANCHORS: dict[str, list[str]] = {
 }
 
 
-def _anchors(atom: EvidenceAtom) -> set[str]:
+def _compute_anchors(atom: EvidenceAtom) -> set[str]:
     """识别一条记录命中的主题锚点集合。"""
     blob = _norm(atom.title) + _norm(atom.content)
     hits = {name for name, kws in TOPIC_ANCHORS.items() if any(k in blob for k in kws)}
     if not hits:
         hits = {"__generic__"}
     return hits
+
+
+def _anchors(atom: EvidenceAtom) -> set[str]:
+    """取该原子的主题锚点（带缓存）。"""
+    return _features(atom)["anchors"]
 
 
 def _share_anchor(a: EvidenceAtom, b: EvidenceAtom) -> bool:
@@ -201,7 +204,7 @@ def _title_kw(atom: EvidenceAtom) -> set[str]:
     为何不只用全文：正文里公司的拆分词（"贵州"/"茅台"）会同时出现在
     大量互不相关的新闻中，仅凭这些共同词会把不同事件错误合并。
     """
-    return _tokens(atom.title)
+    return _features(atom)["title"]
 
 
 def _similarity(a: EvidenceAtom, b: EvidenceAtom) -> float:
@@ -317,6 +320,40 @@ def _tokens(text: str) -> set[str]:
             t = t.replace(sw, " ")
         words = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,6}", t)
     return {w for w in words if _is_meaningful(w)}
+
+
+# ---------------------------------------------------------------------------
+# 特征预计算缓存
+# 归并是 O(n × 簇数) 的成对比较，同一原子的分词结果会被反复用到。
+# 不做缓存时，jieba 分词的重复调用会成为主要耗时（实测占首屏 6s+）。
+# ---------------------------------------------------------------------------
+_FEAT_CACHE: dict[str, dict[str, Any]] = {}
+_FEAT_CACHE_LIMIT = 20000
+
+
+def _features(atom: EvidenceAtom) -> dict[str, Any]:
+    """按 atom_id 缓存该原子的分词结果，避免重复计算。"""
+    cached = _FEAT_CACHE.get(atom.atom_id)
+    if cached is not None:
+        return cached
+
+    explicit = set()
+    for k in atom.keywords or []:
+        explicit |= _tokens(str(k))
+    title_set = _tokens(atom.title)
+    full_set = explicit | _tokens(atom.title + " " + atom.content)
+    anchors = _compute_anchors(atom)
+
+    feat = {
+        "title": title_set,
+        "full": full_set,
+        "explicit": explicit,
+        "anchors": anchors,
+    }
+    if len(_FEAT_CACHE) > _FEAT_CACHE_LIMIT:
+        _FEAT_CACHE.clear()
+    _FEAT_CACHE[atom.atom_id] = feat
+    return feat
 
 
 # 归并时间窗：与簇代表点相隔超过此值就不再比较
@@ -589,8 +626,8 @@ def _numeric_conflict(a: EvidenceAtom, b: EvidenceAtom) -> bool:
     if not na or not nb:
         return False
     # 共享主题词（排除纯数字）才比较
-    ta = {t for t in _tokens(a.title + a.content) if not t.isdigit()}
-    tb = {t for t in _tokens(b.title + b.content) if not t.isdigit()}
+    ta = {t for t in _kw_set(a) if not t.isdigit()}
+    tb = {t for t in _kw_set(b) if not t.isdigit()}
     if len(ta & tb) < 2:
         return False
     return set(na) != set(nb)

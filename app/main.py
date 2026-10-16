@@ -8,12 +8,12 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .adapters import DATA_MODE, fetch_market_context, fetch_records
+from .adapters import DATA_MODE, cache_clear, fetch_market_context, fetch_records
 from .pipeline import build_dashboard
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="Evident", version="1.1.0", description="投资事件情报与证据时间线")
+app = FastAPI(title="Evident", version="1.2.0", description="投资事件情报与证据时间线")
 
 
 @app.get("/api/health")
@@ -26,11 +26,17 @@ def health() -> dict:
 
 
 @app.get("/api/dashboard")
-def dashboard(watch: str = Query("", description="逗号分隔的关注标的，如 600519.SH,300033.SZ")) -> JSONResponse:
+def dashboard(
+    watch: str = Query("", description="逗号分隔的关注标的，如 600519.SH,300033.SZ"),
+    refresh: int = Query(0, description="置 1 时跳过缓存强制刷新"),
+) -> JSONResponse:
     """主链路：取数 -> 原子化 -> 事件归并 -> 冲突/状态仲裁 -> 面板数据。
 
     数据缺失/失败/降级时，health 中会显式标注，绝不静默生成"正常"结论。
+    结果带 TTL 缓存；`refresh=1` 可强制回源。
     """
+    if refresh:
+        cache_clear()
     watch_list = [w.strip() for w in watch.split(",") if w.strip()]
 
     records, health_obj = fetch_records(watch_list)
