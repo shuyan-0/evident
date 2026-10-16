@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evident · 投资事件证据时间线</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --border:#30363d;
+  --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+  --official:#3fb950; --company:#58a6ff; --media_major:#a371f7;
+  --research:#d29922; --media_general:#8b949e; --unattributed:#f85149;
+  --red:#f85149; --green:#3fb950;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ---- 顶部 ---- */
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-size:17px;font-weight:700;letter-spacing:.5px}
+.brand span{color:var(--accent)}
+.tagline{color:var(--muted);font-size:12px}
+.controls{margin-left:auto;display:flex;gap:8px;align-items:center}
+input,button,select{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit}
+input{width:210px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ---- 健康度横幅 ---- */
+#health{margin:0;padding:0}
+.banner{padding:9px 18px;font-size:13px;display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid var(--border)}
+.banner.warn{background:#3d2b0a;color:#f0c674;border-left:4px solid #d29922}
+.banner.err{background:#3d1418;color:#ff9c9c;border-left:4px solid var(--red)}
+.banner.ok{background:#0f2a17;color:#7ee787;border-left:4px solid var(--official)}
+.banner b{white-space:nowrap}
+.banner ul{margin-left:18px}
+
+/* ---- 布局 ---- */
+main{flex:1;display:grid;grid-template-columns:320px 1fr 360px;overflow:hidden}
+.col{overflow-y:auto;border-right:1px solid var(--border)}
+.col:last-child{border-right:none;border-left:1px solid var(--border)}
+.colhead{padding:10px 14px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:2}
+
+/* ---- 统计 ---- */
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;padding:12px}
+.stat{background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px 10px}
+.stat .n{font-size:19px;font-weight:700}
+.stat .l{font-size:11px;color:var(--muted)}
+
+/* ---- 事件卡 ---- */
+.event{padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:.12s}
+.event:hover{background:var(--panel2)}
+.event.active{background:#1f2937;border-left:3px solid var(--accent)}
+.event .t{font-size:13px;font-weight:600;margin-bottom:5px;line-height:1.45}
+.event .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--muted)}
+.badge{padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap}
+.b-CONFIRMED{background:#0f2a17;color:#3fb950}
+.b-DENIED{background:#3d1418;color:#f85149}
+.b-CORRECTED{background:#2b2000;color:#d29922}
+.b-RUMORED{background:#1c2530;color:#8b949e}
+.b-EXPIRED{background:#21262d;color:#6e7681}
+.b-DISPUTED{background:#3b1d3d;color:#d2a8ff}
+.inst{background:#21262d;padding:1px 6px;border-radius:4px;font-family:ui-monospace,monospace;font-size:11px}
+
+/* ---- 时间线 ---- */
+#timeline{padding:16px 18px}
+.evhead{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.evhead h2{font-size:17px;margin-bottom:8px;line-height:1.5}
+.reason{background:var(--panel2);border-left:3px solid var(--accent);padding:9px 12px;border-radius:0 6px 6px 0;font-size:12.5px;color:#c9d1d9;line-height:1.65}
+.basis{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.6}
+
+.atom{position:relative;padding:0 0 16px 26px;border-left:2px solid var(--border)}
+.atom:last-child{border-left-color:transparent}
+.atom::before{content:'';position:absolute;left:-7px;top:5px;width:12px;height:12px;border-radius:50%;background:var(--muted);border:2px solid var(--bg)}
+.atom.t-official::before{background:var(--official)}
+.atom.t-company::before{background:var(--company)}
+.atom.t-media_major::before{background:var(--media_major)}
+.atom.t-research::before{background:var(--research)}
+.atom.t-media_general::before{background:var(--media_general)}
+.atom.t-unattributed::before{background:var(--unattributed)}
+.atom .row1{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:4px}
+.atom .h{font-size:13px;font-weight:600}
+.tier{padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;color:#0d1117}
+.tier.t-official{background:var(--official)}
+.tier.t-company{background:var(--company)}
+.tier.t-media_major{background:var(--media_major)}
+.tier.t-research{background:var(--research)}
+.tier.t-media_general{background:var(--media_general)}
+.tier.t-unattributed{background:var(--unattributed)}
+.claim{padding:1px 7px;border-radius:4px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
+.wbar{display:inline-block;height:5px;border-radius:3px;background:var(--accent);vertical-align:middle;margin-left:5px}
+.atom .body{font-size:12.5px;color:#c9d1d9;margin:6px 0;line-height:1.65}
+.times{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:5px}
+.times span b{color:#9fa8b3;font-weight:500}
+.flag{font-size:10.5px;padding:1px 6px;border-radius:4px;font-weight:600}
+.flag.edit{background:#2b2000;color:#d29922}
+.flag.deny{background:#3d1418;color:#f85149}
+.flag.correct{background:#2b2000;color:#d29922}
+.flag.affirm{background:#0f2a17;color:#3fb950}
+.src{font-size:11px;color:var(--muted);margin-top:4px}
+.src a{color:var(--accent);text-decoration:none}
+.src a:hover{text-decoration:underline}
+
+/* ---- 冲突 ---- */
+#conflicts{padding:14px}
+.conf{background:#2a1420;border:1px solid #6e2b3d;border-radius:8px;padding:11px;margin-bottom:11px}
+.conf .ct{font-size:12.5px;font-weight:700;color:#ff9c9c;margin-bottom:9px}
+.side{background:var(--panel2);border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:12px}
+.side .sh{font-weight:600;margin-bottom:3px;font-size:12px}
+.side .sw{font-size:11px;color:var(--muted)}
+.vs{text-align:center;font-size:11px;color:var(--muted);margin:3px 0}
+.verdict{font-size:11.5px;color:#7ee787;margin-top:8px;padding-top:8px;border-top:1px dashed #6e2b3d;line-height:1.6}
+.empty{color:var(--muted);font-size:12.5px;text-align:center;padding:22px 10px;line-height:1.7}
+
+/* ---- 图例 ---- */
+.legend{padding:11px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.9}
+.legend b{color:#c9d1d9}
+.chip{display:inline-block;padding:1px 6px;border-radius:4px;margin-right:4px;font-size:10.5px}
+.disclaimer{margin-top:9px;padding-top:9px;border-top:1px solid var(--border);font-size:11px;color:#6e7681;line-height:1.65}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="brand">Evident<span>·</span>投资事件证据时间线</div>
+    <div class="tagline">看清最初来源 · 事实演化 · 证据冲突 · 当前状态</div>
+  </div>
+  <div class="controls">
+    <input id="watch" placeholder="关注标的，如 600519.SH,300033.SZ">
+    <button onclick="load()">刷新</button>
+  </div>
+</header>
+<div id="health"></div>
+<main>
+  <div class="col" id="colEvents">
+    <div class="colhead">事件列表</div>
+    <div class="stats" id="stats"></div>
+    <div id="events"></div>
+  </div>
+  <div class="col" id="colMid">
+    <div class="colhead">证据时间线</div>
+    <div id="timeline"><div class="empty">请从左侧选择一个事件</div></div>
+  </div>
+  <div class="col" id="colRight">
+    <div class="colhead">证据冲突</div>
+    <div id="conflicts"><div class="empty">—</div></div>
+    <div class="legend" id="legend"></div>
+  </div>
+</main>
+
+<script>
+let DATA = null, CUR = null;
+
+const fmt = ms => ms ? new Date(ms).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '未知';
+const FULL = ms => ms ? new Date(ms).toLocaleString('zh-CN',{hour12:false}) : '未知';
+
+function renderHealth(h){
+  const el = document.getElementById('health');
+  if(!h){el.innerHTML='';return}
+  const cls = !h.ok ? 'err' : (h.degraded ? 'warn' : 'ok');
+  const icon = !h.ok ? '⛔' : (h.degraded ? '⚠️' : '✅');
+  let txt, extra='';
+  if(!h.ok){
+    txt = `数据源不可用，未能取得任何可用记录。当前展示为空不代表"事件无事发生"。`;
+  } else if(h.degraded){
+    txt = `数据完整性受限：当前为 <b>${h.mode}</b> 模式，结论不可视为完全可靠。`;
+  } else {
+    txt = `数据源正常（${h.mode} 模式），共 ${h.sources ? Object.keys(h.sources).length : 0} 个接口返回。`;
+  }
+  if(h.warnings && h.warnings.length){
+    extra = '<ul>' + h.warnings.map(w=>`<li>${w}</li>`).join('') + '</ul>';
+  }
+  el.innerHTML = `<div class="banner ${cls}"><b>${icon}</b><div><div>${txt}</div>${extra}</div></div>`;
+}
+
+function renderStats(s){
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="n">${s.event_count}</div><div class="l">事件</div></div>
+    <div class="stat"><div class="n">${s.atom_count}</div><div class="l">证据记录</div></div>
+    <div class="stat"><div class="n" style="color:var(--red)">${s.conflict_count}</div><div class="l">证据冲突</div></div>
+    <div class="stat"><div class="n">${s.record_count}</div><div class="l">原始记录</div></div>`;
+}
+
+function renderEvents(){
+  const box = document.getElementById('events');
+  box.innerHTML = DATA.events.map((e,i)=>`
+    <div class="event ${CUR===i?'active':''}" onclick="select(${i})">
+      <div class="t">${e.watched?'⭐ ':''}${e.title}</div>
+      <div class="meta">
+        <span class="badge b-${e.status}">${e.status_label}</span>
+        <span>${e.atom_count}条证据</span>
+        <span>${e.version_count}版本</span>
+        ${e.has_conflict?'<span style="color:var(--red)">⚡冲突</span>':''}
+        ${e.instruments.map(x=>`<span class="inst">${x}</span>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function select(i){
+  CUR = i;
+  const e = DATA.events[i];
+  renderEvents();
+  document.getElementById('timeline').innerHTML = `
+    <div class="evhead">
+      <h2>${e.title}</h2>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:9px">
+        <span class="badge b-${e.status}">${e.status_label}</span>
+        ${e.instruments.map(x=>`<span class="inst">${x}</span>`).join('')}
+      </div>
+      <div class="reason"><b>当前结论依据：</b>${e.status_reason}</div>
+      <div class="basis"><b>归并依据：</b>${e.resolve_basis}</div>
+      <div class="basis"><b>时间跨度：</b>最初来源 ${FULL(e.first_seen)} → 最近更新 ${FULL(e.last_updated)}</div>
+    </div>
+    ${e.atoms.map((a,idx)=>`
+      <div class="atom t-${a.source_tier}">
+        <div class="row1">
+          ${idx===0?'<span style="color:var(--accent);font-size:11px">◆ 最初来源</span>':''}
+          <span class="tier t-${a.source_tier}">${a.tier_label}</span>
+          <span class="claim">${a.claim_label}</span>
+          <span style="font-size:11px;color:var(--muted)">权重 ${a.weight.toFixed(2)}<span class="wbar" style="width:${a.weight*46}px"></span></span>
+          ${a.polarity==='deny'?'<span class="flag deny">否认</span>':''}
+          ${a.polarity==='correct'?'<span class="flag correct">更正</span>':''}
+          ${a.polarity==='affirm'?'<span class="flag affirm">证实</span>':''}
+          ${a.was_edited?'<span class="flag edit">发布后被修改</span>':''}
+        </div>
+        <div class="h">${a.title}</div>
+        <div class="body">${a.content}</div>
+        <div class="times">
+          <span><b>发生</b> ${fmt(a.event_time)}</span>
+          <span><b>披露</b> ${fmt(a.disclose_time)}</span>
+          <span><b>抓取</b> ${fmt(a.fetch_time)}</span>
+          <span><b>更新</b> ${fmt(a.update_time)}</span>
+          ${a.lag_seconds!==null?`<span><b>披露滞后</b> ${(a.lag_seconds/3600).toFixed(1)}h</span>`:''}
+        </div>
+        <div class="src">来源：${a.source_name}｜原始记录 ID：<code>${a.raw_id}</code>
+          ${a.source_url?`｜<a href="${a.source_url}" target="_blank" rel="noopener">查看原文 ↗</a>`:''}
+        </div>
+      </div>`).join('')}`;
+  renderConflicts(e);
+}
+
+function renderConflicts(e){
+  const box = document.getElementById('conflicts');
+  if(!e.conflicts.length){
+    box.innerHTML = '<div class="empty">该事件未检测到证据冲突<br><span style="font-size:11px">（来源口径一致，或冲突已被高权重来源压制）</span></div>';
+    return;
+  }
+  box.innerHTML = e.conflicts.map(c=>`
+    <div class="conf">
+      <div class="ct">⚡ ${c.label}</div>
+      <div class="side">
+        <div class="sh">${c.left.title}</div>
+        <div class="sw">${DATA.stats.tier_labels[c.left.tier]} · ${DATA.stats.claim_labels[c.left.claim]} · 权重 ${c.left.weight}</div>
+      </div>
+      <div class="vs">▼ 冲突 ▼</div>
+      <div class="side">
+        <div class="sh">${c.right.title}</div>
+        <div class="sw">${DATA.stats.tier_labels[c.right.tier]} · ${DATA.stats.claim_labels[c.right.claim]} · 权重 ${c.right.weight}</div>
+      </div>
+      <div class="verdict">裁决：${c.resolved_by}</div>
+    </div>`).join('');
+}
+
+function renderLegend(s){
+  document.getElementById('legend').innerHTML = `
+    <div><b>来源层级（权重）</b></div>
+    ${Object.entries(s.source_weight).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+      `<div><span class="chip tier t-${k}">${s.tier_labels[k]}</span>${v.toFixed(2)}</div>`).join('')}
+    <div style="margin-top:8px"><b>声明类型（可信折扣）</b></div>
+    ${Object.entries(s.claim_weight).map(([k,v])=>
+      `<div><span class="chip claim">${s.claim_labels[k]}</span>${v.toFixed(2)}</div>`).join('')}
+    <div class="disclaimer">本产品仅对公开信息做归类、归并与冲突识别，<b>不提供涨跌预测、收益承诺或买卖建议</b>。所有结论均可回溯至原始记录 ID 与原文链接。</div>`;
+}
+
+const API_BASE = (location.protocol === 'file:') ? 'http://localhost:8000' : '';
+
+function fatal(msg, hint){
+  document.getElementById('health').innerHTML =
+    `<div class="banner err"><b>⛔</b><div><div><b>无法获取数据：</b>${msg}</div>
+     <div style="margin-top:5px">${hint||''}</div></div></div>`;
+  document.getElementById('events').innerHTML =
+    `<div class="empty" style="text-align:left;padding:16px 14px">
+       ${msg}<br><br>
+       <span style="font-size:11.5px;color:#6e7681">${hint||''}</span>
+     </div>`;
+  document.getElementById('timeline').innerHTML = '<div class="empty">后端未连接，暂无数据</div>';
+  document.getElementById('conflicts').innerHTML = '<div class="empty">—</div>';
+}
+
+async function load(){
+  const w = document.getElementById('watch').value.trim();
+  let r;
+  try{
+    r = await fetch(API_BASE + '/api/dashboard?watch=' + encodeURIComponent(w));
+  }catch(e){
+    fatal(
+      location.protocol === 'file:' ? '当前是以本地文件方式打开页面，未连接到后端服务。'
+                                     : '后端服务不可达。',
+      '请通过服务地址访问：<code>http://localhost:8000</code>（启动命令：<code>python3 run.py</code>），'
+      + '而不是直接打开 index.html 文件。'
+    );
+    return;
+  }
+  if(!r.ok){ fatal('后端返回异常状态 ' + r.status, '请查看服务日志确认后端是否正常运行。'); return; }
+  DATA = await r.json();
+  renderHealth(DATA.health);
+  renderStats(DATA.stats);
+  renderEvents();
+  renderLegend(DATA.stats);
+  if(DATA.events.length){
+    const wl = w.split(',').map(x=>x.trim()).filter(Boolean);
+    let idx = DATA.events.findIndex(e=>wl.length && e.instruments.some(x=>wl.includes(x)));
+    select(idx >= 0 ? idx : 0);
+  } else {
+    document.getElementById('timeline').innerHTML = '<div class="empty">无可展示事件</div>';
+    document.getElementById('conflicts').innerHTML = '<div class="empty">—</div>';
+  }
+}
+document.getElementById('watch').addEventListener('keydown', e=>{ if(e.key==='Enter') load(); });
+load();
+</script>
+</body>
+</html>

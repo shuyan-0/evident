@@ -1,0 +1,4 @@
+FUYAO_API_KEY=
+.env
+__pycache__/
+*.pyc
